@@ -30,9 +30,10 @@ class FireWireHealth(QObject):
         self.snapshot_cursors = set()
         self.latest_timestamp = -1
         self.buffer = bytearray()
+        self.stderr_buffer = bytearray()
         self.process = QProcess(self)
         self.process.readyReadStandardOutput.connect(self.read_output)
-        self.process.readyReadStandardError.connect(self.process.readAllStandardError)
+        self.process.readyReadStandardError.connect(self.read_error_output)
         self.process.finished.connect(self.finished)
         self.process.errorOccurred.connect(self.process_error)
         self.deadline = QTimer(self)
@@ -40,8 +41,12 @@ class FireWireHealth(QObject):
         self.deadline.timeout.connect(self.timed_out)
 
     def start(self):
+        # Read an unfiltered snapshot: with --grep, a healthy system may have
+        # no matching entries and therefore no usable cursor for --follow.
+        # We inspect the bounded snapshot locally, then filter the live stream.
+        self.stderr_buffer.clear()
         self.process.start('journalctl', ['-k', '-b', '--no-pager', '-o', 'json', '-n', '200',
-                                         '--show-cursor', '--grep=' + FAULT_PATTERN])
+                                         '--show-cursor'])
         self.deadline.start(5000)
 
     def check(self, device):
@@ -59,8 +64,8 @@ class FireWireHealth(QObject):
 
     def observe(self, line):
         if line.startswith('-- cursor: '):
-            # With --grep and -n, journalctl may scan backwards and report
-            # a footer cursor older than the messages it actually printed.
+            # Prefer the newest cursor from the returned entries; the footer
+            # is a fallback for an empty snapshot.
             if not self.snapshot_cursors:
                 self.cursor = line[len('-- cursor: '):]
             return
@@ -110,6 +115,12 @@ class FireWireHealth(QObject):
                     'This historical entry does not block capture. '
                     'New faults will still stop capture. Kernel: ' + line[:2048])
 
+    def read_error_output(self):
+        self.stderr_buffer.extend(bytes(self.process.readAllStandardError()))
+        # Bound diagnostics even if journalctl emits an unexpectedly large error.
+        if len(self.stderr_buffer) > 8192:
+            del self.stderr_buffer[:-8192]
+
     def read_output(self):
         self.buffer.extend(bytes(self.process.readAllStandardOutput()))
         while b'\n' in self.buffer:
@@ -122,17 +133,25 @@ class FireWireHealth(QObject):
     def finished(self, code, status):
         self.deadline.stop()
         self.read_output()
+        self.read_error_output()
         if self.buffer:
             self.observe(self.buffer.decode(errors='replace'))
             self.buffer.clear()
         if self.stopping:
             return
         if self.following or status != QProcess.ExitStatus.NormalExit or not self.cursor or code not in (0, 1):
-            self.disable('Kernel log monitoring is unavailable. Check journalctl access before starting capture.')
+            detail = self.stderr_buffer.decode(errors='replace').strip()
+            if detail:
+                detail = ' journalctl: ' + detail[-1200:]
+            self.disable(
+                'Kernel log monitoring is unavailable. The application could not read the current boot journal '
+                'or establish a live monitor. On Debian, add your desktop user to the systemd-journal group '
+                'and log out and back in. Then verify with: journalctl -k -b -n 20 --no-pager.' + detail)
             return
         # The cursor closes the gap between the initial snapshot and live stream.
         # No polling, rescanning of the entire journal, or privileged helper.
         self.following = True
+        self.stderr_buffer.clear()
         self.error = ''
         self.ready = True
         self.process.start('journalctl', ['-k', '-b', '--no-pager', '-o', 'json', '--follow',
