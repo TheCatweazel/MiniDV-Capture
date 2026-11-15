@@ -82,7 +82,7 @@ user to start recovery of the specified controller. A driver reset cannot
 guarantee recovery from a kernel hang or prevent recurring DMA faults.
 See [FireWire stability notes](docs/firewire-stability.md).
 
-The **Setup** button installs missing tools and configures FireWire permissions.
+The **Setup** button installs missing tools, configures FireWire permissions and (when launched through the administrator prompt) adds the desktop user to `systemd-journal` for kernel-log monitoring. After this first setup, log out and back in or reboot so the new group membership takes effect.
 It supports APT (Ubuntu/Debian), pacman (Arch/CachyOS) and DNF (Fedora). It may
 ask for administrator authorization; the app itself runs as your normal user.
 Right-click the tray icon to open or quit the app.
@@ -161,7 +161,9 @@ for reviewing, testing and maintaining the code.
 ### FireWire fault protection
 
 Capture now requires readable kernel logs through `journalctl`. Before capture,
-the app checks recent FireWire DMA/driver errors from the current boot, then
+the app reads the last 200 kernel entries from the current boot and checks them
+locally for FireWire DMA/driver errors. This unfiltered snapshot ensures a clean
+system with no previous FireWire errors still supplies a journal cursor. It then
 monitors new errors asynchronously. Historical entries only produce a warning
 and do not block capture. New DMA page faults are visible warnings; they do not by themselves abort or
 block capture. A live stalled-DMA-context or controller-access failure blocks
