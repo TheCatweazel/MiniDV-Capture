@@ -46,6 +46,22 @@ RULES
     udevadm control --reload-rules
     udevadm trigger --subsystem-match=firewire --action=add
     udevadm settle --timeout=10
+
+    # journalctl access is required for passive FireWire fault monitoring.
+    # pkexec supplies PKEXEC_UID; sudo is supported for manual setup.
+    caller_uid="${PKEXEC_UID:-${SUDO_UID:-}}"
+    if [[ -n "$caller_uid" && "$caller_uid" != 0 ]] && getent group systemd-journal >/dev/null; then
+        caller_name="$(getent passwd "$caller_uid" | cut -d: -f1)"
+        if [[ -n "$caller_name" ]] && ! id -nG "$caller_name" | tr ' ' '\n' | grep -qx systemd-journal; then
+            usermod -aG systemd-journal "$caller_name"
+            printf 'Added %s to systemd-journal. Log out and back in (or reboot) before launching MiniDV Capture.\n' "$caller_name"
+        elif [[ -n "$caller_name" ]]; then
+            printf '%s is already a member of systemd-journal.\n' "$caller_name"
+        fi
+    else
+        printf 'Could not determine the desktop user or systemd-journal group. Check journalctl access manually.\n'
+    fi
+
     printf '\nMiniDV Capture setup complete.\n'
 }
 
