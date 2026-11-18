@@ -118,7 +118,22 @@ class KernelHealthTests(unittest.TestCase):
         self.assertEqual(program, 'journalctl')
         self.assertIn('-b', args)
         self.assertEqual(args[args.index('-n') + 1], '200')
+        self.assertIn('--show-cursor', args)
+        self.assertFalse(any(arg.startswith('--grep=') for arg in args))
         self.assertTrue(self.health.deadline.isActive())
+
+    def test_clean_snapshot_without_firewire_faults_still_starts_monitor(self):
+        entry = json.dumps({
+            '__CURSOR': 'clean-snapshot-cursor',
+            '__MONOTONIC_TIMESTAMP': '100',
+            'MESSAGE': 'Linux version 6.x booted successfully',
+        })
+        self.health.observe(entry)
+        with patch.object(self.health.process, 'start') as start:
+            self.health.finished(0, QProcess.ExitStatus.NormalExit)
+        self.assertTrue(self.health.ready)
+        self.assertTrue(self.health.following)
+        self.assertIn('--after-cursor=clean-snapshot-cursor', start.call_args.args[1])
 
     def test_snapshot_cursor_covers_gap_before_live_monitor(self):
         self.health.observe('-- cursor: s=test;b=boot;i=42')
